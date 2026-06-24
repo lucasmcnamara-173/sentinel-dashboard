@@ -127,6 +127,12 @@ async function loadFromSupabase() {
       sessions: sessions.map(s => ({ ...s, trades: tBy[s.date] || [], vetoes: vBy[s.date] || [] })),
     };
     if (acct && acct[0]) data.account = { ...acct[0], positions: acct[0].positions || [] };
+    // No sessions traded yet: show the real account equity in the cards (not $0)
+    // so they match the live Alpaca account panel above.
+    if (!sessions.length && data.account) {
+      data.summary.latest_equity = +data.account.equity || 0;
+      data.summary.peak_equity = +data.account.equity || 0;
+    }
     // Latest walk-forward evidence run (optional — never breaks the rest).
     try {
       const ev = await sbFetch("strategy_evidence?select=*&order=id.desc&limit=1");
