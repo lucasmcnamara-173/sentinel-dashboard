@@ -56,6 +56,7 @@
   <div id="banner"></div>
   <div id="account"></div>
   <div class="cards" id="cards"></div>
+  <div id="scoreboard"></div>
   <div class="panel">
     <h2>Equity curve</h2>
     <div id="chart"></div>
@@ -126,6 +127,11 @@ async function loadFromSupabase() {
       sessions: sessions.map(s => ({ ...s, trades: tBy[s.date] || [], vetoes: vBy[s.date] || [] })),
     };
     if (acct && acct[0]) data.account = { ...acct[0], positions: acct[0].positions || [] };
+    // Latest walk-forward evidence run (optional — never breaks the rest).
+    try {
+      const ev = await sbFetch("strategy_evidence?select=*&order=id.desc&limit=1");
+      data.evidence = ev && ev[0] ? ev[0] : null;
+    } catch (e) { data.evidence = null; }
     return data;
   } catch (e) {
     console.warn("Supabase load failed; falling back to static data.json", e);
@@ -170,6 +176,45 @@ function renderCards(s) {
   $("cards").innerHTML = cards.map(([label,value,cls]) =>
     `<div class="card"><div class="label">${label}</div><div class="value ${cls||""}">${value}</div></div>`
   ).join("");
+}
+
+function renderScoreboard(ev) {
+  const el = $("scoreboard");
+  if (!el) return;
+  if (!ev) { el.innerHTML = ""; return; }
+  const fmt = (v, d=2) => (v === null || v === undefined || isNaN(+v)) ? "—" : (+v).toFixed(d);
+  const badge = ev.passed
+    ? '<span class="chip" style="background:#1b3a26;color:var(--green)">✅ PASS</span>'
+    : '<span class="chip" style="background:#3a1d1d;color:var(--red)">❌ FAIL</span>';
+  const board = (ev.scoreboard || []).slice()
+    .sort((a, b) => (isNaN(+b.sharpe) ? -99 : +b.sharpe) - (isNaN(+a.sharpe) ? -99 : +a.sharpe));
+  const rows = board.map(s => {
+    const isRL = s.strategy === "rl_agent";
+    return `<tr${isRL ? ' style="background:#10151c"' : ''}>
+      <td>${isRL ? '🧠 ' : ''}${s.strategy}</td>
+      <td class="num">${fmt(s.sharpe)}</td>
+      <td class="num ${signClass(+s.total_return)}">${fmt((+s.total_return || 0) * 100, 1)}%</td>
+      <td class="num">${fmt((+s.max_drawdown || 0) * 100, 1)}%</td>
+      <td class="num">${fmt((+s.win_rate || 0) * 100, 1)}%</td></tr>`;
+  }).join("") || '<tr><td colspan="5" class="empty">no strategies</td></tr>';
+  const when = ev.generated_at ? new Date(ev.generated_at).toLocaleString() : "";
+  const commit = ev.git_commit ? ev.git_commit.slice(0, 7) : "";
+  el.innerHTML = `<div class="panel">
+    <h2>Strategy scoreboard ${badge}</h2>
+    <div class="sub" style="margin:-6px 0 12px;text-transform:none">
+      Out-of-sample walk-forward. The RL brain must beat every baseline on Sharpe
+      <em>and</em> keep its veto rate under 5% to PASS.${when ? ' · ' + when : ''}${commit ? ' · ' + commit : ''}
+    </div>
+    <div class="cards" style="margin:0 0 14px">
+      <div class="card"><div class="label">RL Sharpe</div><div class="value">${fmt(ev.rl_sharpe)}</div></div>
+      <div class="card"><div class="label">Best baseline · ${ev.best_competitor || '—'}</div><div class="value">${fmt(ev.best_competitor_sharpe)}</div></div>
+      <div class="card"><div class="label">RL veto rate</div><div class="value">${fmt((+ev.veto_rate || 0) * 100, 1)}%</div></div>
+    </div>
+    <table>
+      <thead><tr><th>Strategy</th><th class="num">Sharpe</th><th class="num">Return</th>
+      <th class="num">Max DD</th><th class="num">Win rate</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+  </div>`;
 }
 
 function renderChart(curve) {
@@ -229,6 +274,7 @@ function renderSessions(sessions) {
   renderBanner(d);
   renderAccount(d.account);
   renderCards(d.summary || {});
+  renderScoreboard(d.evidence);
   renderChart(d.equity_curve || []);
   renderSessions(d.sessions || []);
 })();
